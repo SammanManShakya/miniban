@@ -2,8 +2,9 @@
 
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import Login from '../components/Login.vue'
-import Home from '../components/Home.vue'
+import Login from '@/components/Login.vue'
+import Home from '@/components/Home.vue'
+import Alltasks from '@/components/Alltasks.vue'   // <-- import your Alltasks component
 
 const routes = [
   {
@@ -15,6 +16,12 @@ const routes = [
     path: '/home',
     name: 'home',
     component: Home,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/alltasks',
+    name: 'alltasks',
+    component: Alltasks,
     meta: { requiresAuth: true }
   },
   {

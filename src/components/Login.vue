@@ -28,7 +28,8 @@ import {
   query,
   where,
   getDocs,
-  addDoc
+  addDoc,
+  updateDoc
 } from "firebase/firestore";
 
 export default {
@@ -39,33 +40,50 @@ export default {
   methods: {
     async handleOAuthLogin(provider) {
       this.error = null;
-
       try {
         // 1) Sign in with popup
         const result = await signInWithPopup(auth, provider);
-        const user = result.user;
-        const email = user.email;
+        const user    = result.user;
+        const email   = user.email;
 
         // 2) Look up existing user doc
         const usersRef = collection(db, "users");
-        const q = query(usersRef, where("user_email", "==", email));
+        const q        = query(usersRef, where("user_email", "==", email));
         const snapshot = await getDocs(q);
 
+        // 3) Extract a profile-picture URL
+        const fbProfile = result.additionalUserInfo?.profile || {};
+        let photoURL = "";
+        if (user.photoURL) {
+          photoURL = user.photoURL;
+        } else if (fbProfile.picture) {
+          // Facebook's API returns an object under picture.data.url
+          if (typeof fbProfile.picture === "string") {
+            photoURL = fbProfile.picture;
+          } else if (fbProfile.picture.data?.url) {
+            photoURL = fbProfile.picture.data.url;
+          }
+        }
+
         if (!snapshot.empty) {
-          // 3) If provider mismatch, block
-          const data = snapshot.docs[0].data();
+          const docRef = snapshot.docs[0].ref;
+          const data   = snapshot.docs[0].data();
+
+          // 4) If provider mismatch, block
           if (data.authProvider && data.authProvider !== provider.providerId) {
-            // sign them right back out
             await firebaseSignOut(auth);
             this.error = `Please sign in with ${
               data.authProvider === "facebook.com" ? "Facebook" : "Google"
             }.`;
             return;
           }
-        }
 
-        // 4) Create user doc if new (and store authProvider)
-        if (snapshot.empty) {
+          // 5) Update stored profile picture if it's changed
+          if (photoURL && data.profile_picture !== photoURL) {
+            await updateDoc(docRef, { profile_picture: photoURL });
+          }
+        } else {
+          // 6) Create user doc if new
           const profile = result.additionalUserInfo?.profile || {};
           const [firstName, lastName] = (() => {
             if (profile.given_name || profile.first_name) {
@@ -79,19 +97,20 @@ export default {
           })();
 
           await addDoc(usersRef, {
-            user_email: email,
-            first_name: firstName,
-            last_name: lastName,
-            authProvider: provider.providerId,
-            user_tasks: [],
-            user_todo: [],
-            user_doing: [],
-            user_done: []
+            user_email:       email,
+            first_name:       firstName,
+            last_name:        lastName,
+            authProvider:     provider.providerId,
+            profile_picture:  photoURL,
+            user_tasks:       [],
+            user_todo:        [],
+            user_doing:       [],
+            user_done:        []
           });
         }
 
-        // 5) All good → redirect
-        return this.$router.push({ name: "home" });
+        // 7) Redirect
+        this.$router.push({ name: "home" });
       } catch (err) {
         this.error = err.message;
       }
@@ -100,7 +119,6 @@ export default {
     loginWithGoogle() {
       this.handleOAuthLogin(new GoogleAuthProvider());
     },
-
     loginWithFacebook() {
       this.handleOAuthLogin(new FacebookAuthProvider());
     }

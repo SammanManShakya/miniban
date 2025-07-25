@@ -1,21 +1,78 @@
 <template>
-  <div class="kanban-column">
+  <div
+    class="kanban-column"
+    @dragover.prevent
+    @drop="onDrop"
+  >
     <h3>Done</h3>
     <Task
-      v-for="t in tasks"
-      :key="t.task_id"
+      v-for="t in recentTasks"
+      :key="`${t.task_id}-${t.created}`"
       :task="t"
     />
   </div>
 </template>
 
 <script setup>
-import { defineProps } from 'vue'
+import { defineProps, computed } from 'vue'
 import Task from './Task.vue'
+import { auth, db } from '@/firebase/init.js'
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  arrayRemove,
+  arrayUnion
+} from 'firebase/firestore'
 
 const props = defineProps({
   tasks: { type: Array, default: () => [] }
 })
+
+// filter to only those finished in last 48h
+const recentTasks = computed(() => {
+  const now = Date.now()
+  const cutoff = now - 48 * 3600 * 1000
+  return props.tasks.filter(t => {
+    if (!t.finished) return false
+    const f = Date.parse(t.finished)
+    return !isNaN(f) && f >= cutoff
+  })
+})
+
+async function onDrop(e) {
+  const raw = e.dataTransfer.getData('application/json')
+  if (!raw) return
+  const task = JSON.parse(raw)
+
+  const oldStatus = task.status
+  const newStatus = 'done'
+
+  const email = auth.currentUser.email
+  const usersRef = collection(db, 'users')
+  const q = query(usersRef, where('user_email', '==', email))
+  const snap = await getDocs(q)
+  if (snap.empty) return
+  const userDocRef = snap.docs[0].ref
+
+  // remove old entry
+  await updateDoc(userDocRef, { user_tasks: arrayRemove(task) })
+
+  // update task object
+  task.status = newStatus
+  task.finished = new Date().toISOString()
+
+  // build payload: move ID between status arrays
+  const payload = {
+    user_tasks: arrayUnion(task),
+    [`user_${oldStatus}`]: arrayRemove(task.task_id),
+    [`user_${newStatus}`]: arrayUnion(task.task_id)
+  }
+
+  await updateDoc(userDocRef, payload)
+}
 </script>
 
 <style scoped>

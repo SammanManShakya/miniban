@@ -2,7 +2,10 @@
   <div
     v-if="!deleted"
     class="task-card"
-    :class="{ expanded: open }"
+    :class="{ expanded: open, dragging: isDragging }"
+    draggable="true"
+    @dragstart="onDragStart"
+    @dragend="onDragEnd"
     @mouseenter="isHovered = true"
     @mouseleave="isHovered = false"
     @click="toggleExpand"
@@ -40,39 +43,70 @@ import {
   arrayRemove
 } from 'firebase/firestore'
 
+const emit = defineEmits(['move-task'])
 const props = defineProps({
   task: { type: Object, required: true }
 })
 
 const isExpanded = ref(false)
 const isHovered  = ref(false)
+const isDragging = ref(false)
 const deleted    = ref(false)
 
-// open when hovered or toggled
+// open when hovered or permanently expanded
 const open = computed(() => isExpanded.value || isHovered.value)
 
 function toggleExpand() {
   isExpanded.value = !isExpanded.value
 }
 
+function onDragStart(e) {
+  isDragging.value = true
+  e.dataTransfer.setData('application/json', JSON.stringify(props.task))
+  e.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragEnd() {
+  isDragging.value = false
+  emit('move-task', null)
+}
+
 async function confirmDelete() {
   if (!confirm('Are you sure you want to delete this task?')) return
 
   try {
-    // find user document by email
+    // 1) Fetch the user doc
     const email = auth.currentUser.email
     const usersRef = collection(db, 'users')
     const q = query(usersRef, where('user_email', '==', email))
     const snap = await getDocs(q)
-    if (!snap.empty) {
-      const userDoc = snap.docs[0].ref
-      // remove this task object from the array
-      await updateDoc(userDoc, {
-        user_tasks: arrayRemove(props.task)
-      })
+    if (snap.empty) throw new Error('User document not found')
+
+    const userDocRef = snap.docs[0].ref
+    const data = snap.docs[0].data()
+    const currentTasks = data.user_tasks || []
+
+    // 2) Remove from user_tasks
+    const updatedTasks = currentTasks.filter(
+      t => !(t.task_id === props.task.task_id && t.created === props.task.created)
+    )
+
+    // 3) Determine which status-array to update
+    //    e.g. 'todo' → 'user_todo'
+    const statusField = `user_${props.task.status}`
+
+    // 4) Build the payload
+    const payload = { user_tasks: updatedTasks }
+    if (data[statusField]) {
+      payload[statusField] = arrayRemove(props.task.task_id)
     }
-    // hide this card
+
+    // 5) Commit update
+    await updateDoc(userDocRef, payload)
+
+    // 6) Hide locally
     deleted.value = true
+
   } catch (err) {
     console.error('Failed to delete task:', err)
     alert('Could not delete task. Please try again.')
@@ -88,15 +122,20 @@ async function confirmDelete() {
   margin-bottom: 0.5rem;
   border-radius: 4px;
   border: 1px solid #ffffff;
-  cursor: pointer;
+  cursor: grab;
   transform: scale(1);
   transition:
     transform 0.2s,
     background 0.2s,
-    border-color 0.2s;
+    border-color 0.2s,
+    opacity 0.2s;
 }
 .task-card:hover {
   transform: scale(1.25);
+}
+.task-card.dragging {
+  opacity: 0.6;
+  cursor: grabbing;
 }
 .task-card.expanded {
   background: #ffffff;
@@ -129,7 +168,6 @@ async function confirmDelete() {
   padding-left: 1.25rem;
 }
 
-/* place delete button at bottom */
 .delete-btn {
   margin-top: 0.75rem;
   background: #e53e3e;
@@ -140,7 +178,6 @@ async function confirmDelete() {
   font-size: 0.875rem;
   cursor: pointer;
 }
-
 .delete-btn:hover {
   opacity: 0.9;
 }

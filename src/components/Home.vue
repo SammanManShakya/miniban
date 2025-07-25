@@ -1,34 +1,27 @@
 <template>
   <div class="home-container">
-    <h1>Welcome, {{ fullName }}!</h1>
+    <h1>{{ typedText }}</h1>
 
     <button class="btn add-task" @click="showAdd = true">
       Add task
     </button>
 
-    <!-- popup -->
     <Addtask
       v-if="showAdd"
       @add-task="onAdd"
       @close="showAdd = false"
     />
 
-    <!-- kanban board -->
     <Kanban
       :todo="todoTasks"
       :doing="doingTasks"
       :done="doneTasks"
     />
-
-    <button class="btn signout" @click="signOut">
-      Sign Out
-    </button>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { db } from '@/firebase/init.js'
 import {
@@ -37,61 +30,102 @@ import {
   where,
   getDocs,
   updateDoc,
-  arrayUnion
+  arrayUnion,
+  onSnapshot
 } from 'firebase/firestore'
 
 import Addtask from './Addtask.vue'
 import Kanban  from './Kanban.vue'
 
-const router    = useRouter()
-const authStore = useAuthStore()
+const authStore  = useAuthStore()
 
-// user display name
-const fullName = ref('')
-// popup toggle
-const showAdd  = ref(false)
-
-// tasks by status
+const fullName   = ref('')
+const typedText  = ref('')
+const showAdd    = ref(false)
 const todoTasks  = ref([])
 const doingTasks = ref([])
 const doneTasks  = ref([])
 
-// Firestore doc ref for this user
 let userDocRef = null
+let unsubscribe = null
+let timeouts = []
+
+onBeforeUnmount(() => {
+  if (unsubscribe) unsubscribe()
+  timeouts.forEach(id => clearTimeout(id))
+})
 
 onMounted(async () => {
-  // load user & name
   const user = authStore.user
-  if (user?.email) {
-    const usersRef = collection(db, 'users')
-    const q        = query(usersRef, where('user_email', '==', user.email))
-    const snap     = await getDocs(q)
-    if (!snap.empty) {
-      const docSnap = snap.docs[0]
-      userDocRef = docSnap.ref
-      const data = docSnap.data()
-      fullName.value = `${data.first_name} ${data.last_name}`.trim()
+  if (!user?.email) return
 
-      // populate tasks arrays
-      const all = data.user_tasks || []
-      todoTasks.value  = all.filter(t => t.status === 'todo')
-      doingTasks.value = all.filter(t => t.status === 'doing')
-      doneTasks.value  = all.filter(t => t.status === 'done')
-    }
+  const usersRef = collection(db, 'users')
+  const q        = query(usersRef, where('user_email', '==', user.email))
+  const snap     = await getDocs(q)
+  if (snap.empty) return
+
+  userDocRef     = snap.docs[0].ref
+  const data     = snap.docs[0].data()
+  fullName.value = `${data.first_name} ${data.last_name}`.trim()
+
+  unsubscribe = onSnapshot(userDocRef, docSnap => {
+    const all = (docSnap.data() || {}).user_tasks || []
+    const unique = Array.from(
+      new Map(all.map(t => [`${t.task_id}-${t.created}`, t])).values()
+    )
+    todoTasks.value  = unique.filter(t => t.status === 'todo')
+    doingTasks.value = unique.filter(t => t.status === 'doing')
+    doneTasks.value  = unique.filter(t => t.status === 'done')
+  })
+})
+
+watch(fullName, (name) => {
+  if (!name) return
+
+  const welcome     = `Welcome, ${name}!`
+  const secondMsg   = 'Here are your tasks!'
+  const typeInterval = 100
+  const pauseAfter   = 3000
+  const backInterval = 75
+
+  timeouts.forEach(id => clearTimeout(id))
+  timeouts = []
+  typedText.value = ''
+
+  // 1) Type welcome
+  welcome.split('').forEach((char, i) => {
+    const id = setTimeout(() => {
+      typedText.value += char
+    }, typeInterval * i)
+    timeouts.push(id)
+  })
+
+  // 2) After typing + pause, backspace
+  const startBack = typeInterval * welcome.length + pauseAfter
+  for (let j = 1; j <= welcome.length; j++) {
+    const id = setTimeout(() => {
+      typedText.value = welcome.slice(0, welcome.length - j)
+    }, startBack + backInterval * j)
+    timeouts.push(id)
   }
+
+  // 3) After backspacing, type second message
+  const startSecond = startBack + backInterval * (welcome.length + 1)
+  secondMsg.split('').forEach((char, k) => {
+    const id = setTimeout(() => {
+      typedText.value += char
+    }, startSecond + typeInterval * k)
+    timeouts.push(id)
+  })
 })
 
 async function onAdd({ title, details, created, finished }) {
   if (!userDocRef) return
 
-  // fetch current tasks to compute next ID
-  const snap = await getDocs(query(
-    collection(db, 'users'),
-    where('user_email', '==', authStore.user.email)
-  ))
-  const userDoc = snap.docs[0]
-  const current = userDoc.data().user_tasks || []
-  const nextId = current.length + 1
+  const totalCount = todoTasks.value.length +
+                     doingTasks.value.length +
+                     doneTasks.value.length
+  const nextId = totalCount + 1
 
   const newTask = {
     task_id:  nextId,
@@ -102,22 +136,12 @@ async function onAdd({ title, details, created, finished }) {
     finished
   }
 
-  // append in Firestore
   await updateDoc(userDocRef, {
-    user_tasks: arrayUnion(newTask)
+    user_tasks: arrayUnion(newTask),
+    user_todo:  arrayUnion(nextId)
   })
 
-  // update local arrays
-  todoTasks.value.push(newTask)
-
-  // close popup
   showAdd.value = false
-}
-
-function signOut() {
-  authStore.logout().then(() => {
-    router.push({ name: 'login' })
-  })
 }
 </script>
 
@@ -136,10 +160,6 @@ function signOut() {
 }
 .add-task {
   background: #3182ce;
-  color: white;
-}
-.signout {
-  background: #e53e3e;
   color: white;
 }
 .btn:hover {
