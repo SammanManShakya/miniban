@@ -72,6 +72,7 @@ function close() {
 }
 .popup {
   background: white;
+  color: #000;               /* ensure text is black */
   padding: 1.5rem;
   border-radius: 8px;
   width: 300px;
@@ -83,6 +84,16 @@ function close() {
 .popup label {
   display: block;
   margin-bottom: 1rem;
+  color: #000;               /* ensure label text is black */
+}
+.popup input {
+  width: 100%;
+  padding: 0.5rem;
+  margin-top: 0.25rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #000;               /* input text black */
 }
 .detail-input {
   margin-bottom: 0.5rem;
